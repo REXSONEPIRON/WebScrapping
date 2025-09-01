@@ -1,41 +1,33 @@
-import re
-import requests
-from urllib.parse import urljoin, urlparse
-from bs4 import BeautifulSoup
+import streamlit as st
+import pandas as pd
+from email_scraper import scrape_emails
 
-def extract_emails_from_html(html):
-    return set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", html))
+st.set_page_config(page_title="Email Scraper", layout="centered")
 
-def is_valid_url(url, base_domain):
-    try:
-        parsed = urlparse(url)
-        return parsed.netloc.endswith(base_domain)
-    except:
-        return False
+st.title("📧 Website Email Scraper")
+st.markdown("Enter a website domain (like `https://example.com`) to find public email addresses.")
 
-def crawl(url, base_domain, visited_urls, emails_found, depth=0, max_depth=1):
-    if url in visited_urls or depth > max_depth:
-        return
+# Input field
+url_input = st.text_input("Website URL", placeholder="https://yourdomain.com")
 
-    visited_urls.add(url)
-    try:
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
-        html = response.text
-        emails_found.update(extract_emails_from_html(html))
+# Max depth selector
+depth = st.slider("Crawling Depth", 1, 2, 1)
 
-        soup = BeautifulSoup(html, 'html.parser')
-        for link in soup.find_all('a', href=True):
-            href = link['href']
-            next_url = urljoin(url, href).split('#')[0]
-            if is_valid_url(next_url, base_domain):
-                crawl(next_url, base_domain, visited_urls, emails_found, depth + 1, max_depth)
-    except requests.RequestException:
-        pass
+# Scrape button
+if st.button("🔍 Start Scraping"):
+    if not url_input.startswith("http"):
+        st.error("Please enter a valid URL starting with http or https.")
+    else:
+        with st.spinner("Scraping in progress..."):
+            emails = scrape_emails(url_input, max_depth=depth)
 
-def scrape_emails(starting_url, max_depth=1):
-    visited_urls = set()
-    emails_found = set()
-    base_domain = urlparse(starting_url).netloc
-    crawl(starting_url, base_domain, visited_urls, emails_found, 0, max_depth)
-    return sorted(emails_found)
+        if emails:
+            st.success(f"✅ Found {len(emails)} email(s):")
+            st.write(emails)
+
+            # Download button
+            df = pd.DataFrame(emails, columns=["Email"])
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("⬇️ Download CSV", csv, "emails_found.csv", "text/csv")
+        else:
+            st.warning("No emails found.")
