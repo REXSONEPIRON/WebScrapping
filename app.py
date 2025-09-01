@@ -1,95 +1,41 @@
-# app.py
+import re
+import requests
+from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
 
-import streamlit as st
-import pandas as pd
-from email_scraper import scrape_emails
+def extract_emails_from_html(html):
+    return set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", html))
 
-# Page config
-st.set_page_config(page_title="Email Scraper", layout="wide", page_icon="📧")
+def is_valid_url(url, base_domain):
+    try:
+        parsed = urlparse(url)
+        return parsed.netloc.endswith(base_domain)
+    except:
+        return False
 
-# Custom CSS for styling
-st.markdown(
-    """
-    <style>
-    .main > div.block-container {
-        max-width: 800px;
-        padding: 2rem 3rem;
-    }
-    .title {
-        font-size: 2.5rem;
-        font-weight: 700;
-        color: #4a90e2;
-        margin-bottom: 0;
-    }
-    .subtitle {
-        color: #6c757d;
-        font-size: 1.1rem;
-        margin-top: 0.1rem;
-        margin-bottom: 2rem;
-    }
-    .stButton>button {
-        background-color: #4a90e2;
-        color: white;
-        font-weight: 600;
-        padding: 0.5rem 1.5rem;
-        border-radius: 8px;
-        transition: background-color 0.3s ease;
-    }
-    .stButton>button:hover {
-        background-color: #357ABD;
-    }
-    .email-list {
-        font-family: "Courier New", Courier, monospace;
-        font-size: 1.1rem;
-        background: #f1f5f9;
-        border-radius: 8px;
-        padding: 1rem;
-        max-height: 300px;
-        overflow-y: auto;
-        margin-top: 1rem;
-        margin-bottom: 2rem;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+def crawl(url, base_domain, visited_urls, emails_found, depth=0, max_depth=1):
+    if url in visited_urls or depth > max_depth:
+        return
 
-# Title and description
-st.markdown('<h1 class="title">📧 Website Email Scraper</h1>', unsafe_allow_html=True)
-st.markdown(
-    '<p class="subtitle">Enter a website URL to find publicly available email addresses.</p>',
-    unsafe_allow_html=True,
-)
+    visited_urls.add(url)
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        html = response.text
+        emails_found.update(extract_emails_from_html(html))
 
-# Input & controls container
-with st.form(key='scraper_form'):
-    url_input = st.text_input("🔗 Website URL", placeholder="https://example.com")
-    depth = st.slider("Crawling Depth (max pages to crawl)", min_value=1, max_value=2, value=1, help="Increase to crawl more pages but it will take longer.")
-    submit_button = st.form_submit_button(label="🔍 Start Scraping")
+        soup = BeautifulSoup(html, 'html.parser')
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            next_url = urljoin(url, href).split('#')[0]
+            if is_valid_url(next_url, base_domain):
+                crawl(next_url, base_domain, visited_urls, emails_found, depth + 1, max_depth)
+    except requests.RequestException:
+        pass
 
-if submit_button:
-    if not url_input.startswith(("http://", "https://")):
-        st.error("⚠️ Please enter a valid URL starting with http:// or https://")
-    else:
-        with st.spinner("⏳ Scraping emails, please wait..."):
-            emails = scrape_emails(url_input, max_depth=depth)
-
-        if emails:
-            st.success(f"✅ Found {len(emails)} email(s):")
-            st.markdown('<div class="email-list">', unsafe_allow_html=True)
-            for email in emails:
-                st.markdown(f"• {email}")
-            st.markdown('</div>', unsafe_allow_html=True)
-
-            # Export to CSV button
-            df = pd.DataFrame(emails, columns=["Email"])
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="⬇️ Download Emails as CSV",
-                data=csv,
-                file_name="emails_found.csv",
-                mime="text/csv",
-                help="Download all scraped emails as a CSV file",
-            )
-        else:
-            st.warning("⚠️ No emails found on the website.")
+def scrape_emails(starting_url, max_depth=1):
+    visited_urls = set()
+    emails_found = set()
+    base_domain = urlparse(starting_url).netloc
+    crawl(starting_url, base_domain, visited_urls, emails_found, 0, max_depth)
+    return sorted(emails_found)
